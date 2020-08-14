@@ -594,7 +594,7 @@ def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cor
     n_cores: int
         number of CPU cores for parallelization, default is 1
     num_rank_blocks: int
-        the number of blocks by which to rank order, from #1 to #(num_rank_blocks) inclusive,
+        the number of blocks to rank order by, from #1 to #(num_rank_blocks)
         default is 1
     output_path: str
         path to which files should be saved,
@@ -617,8 +617,8 @@ def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cor
             inner_dist.append(inner_result)
             outer_dist.append(outer_result)
 
-        np.save(f'{output_path}/outer_accs_dist.npy', outer_dist)
-        np.save(f'{output_path}/inner_accs_dist.npy', inner_dist)
+        np.save(f'{output_path}/outer_perms.npy', outer_dist)
+        np.save(f'{output_path}/inner_perms.npy', inner_dist)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("indir", metavar="INDIR", help="directory to input data")
@@ -660,13 +660,18 @@ data_params = {'path': path, 'roi': roi, 'conds': conds}
 grid_params = {'gamma': gamma_range, 'C': C_range, 'kernels': kernels}
 
 if args.permute:
-    inner_dist = []
-    outer_dist = []
+    try:
+        inner_dist = np.load(f'{output_path}/inner_perms.npy').tolist()
+        outer_dist = np.load(f'{output_path}/outer_perms.npy').tolist()
+    except FileNotFoundError:
+        print('Creating new permutation distribution...')
+        inner_dist = []
+        outer_dist = []
 
     permutation(data_params, grid_params, inner_dist, outer_dist, runs=run_count, output_path=output_path, num_rank_blocks=block_count, n_cores=num_cores)
 
-    np.save(f'{output_path}/outer_dist.npy', outer_dist)
-    np.save(f'{output_path}/inner_dist.npy', inner_dist)
+    np.save(f'{output_path}/outer_perms.npy', outer_dist)
+    np.save(f'{output_path}/inner_perms.npy', inner_dist)
 
 else:
     start = time.time()
