@@ -7,6 +7,7 @@ import itertools
 import scipy.io
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
@@ -16,6 +17,8 @@ from joblib import Parallel, delayed
 """
 Simulation settings
 """
+
+OUTPUT_DIR = 'output/ip_combined/between/mt/'
 
 path = 'scans/ip_only_data.mat'
 roi = 1                            # V1-roi: 0, MT-roi: 1
@@ -206,8 +209,6 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
     return best_params, best_acc
 
 def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, use_abs_to_rank=False):
-    start_time = time.time()
-    
     subjects = get_subjects(data_params['path'])
     mat = scipy.io.loadmat(data_params['path'])['ipOnly_roi_scanData']
     bmin, bmax = get_min_max_block_length(data_params['path'], data_params['roi'])
@@ -217,8 +218,8 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
     inner_acc_report = []
     outer_acc_report = [[] for _ in range(2)]
     
-    for outer_subject in subjects:
-        print(f"Currently on outer subject #{subjects.index(outer_subject)+1} of {len(subjects)}.")
+    for outer_subject_idx in tqdm(range(len(subjects))):
+        outer_subject = subjects[outer_subject_idx]
 
         opt_inner_params = None
         opt_inner_acc = -1
@@ -264,11 +265,6 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
                 outer_acc = svclassifier.score(x_test, y_test)
                 outer_acc_report[i].append(outer_acc)
         
-    # Prints how long it took for last outer subject test
-    end_time = time.time()
-    exec_time = end_time - start_time
-    print(f"Completed in {round(exec_time/60, 2)} minutes.")
-    
     return inner_acc_report, outer_acc_report
 
 gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
@@ -290,8 +286,8 @@ for i in range(start_block, n_blocks+1):
 
     inner_accs.append(inner_res)
     outer_accs.append(outer_res)
-    np.save(f'output/ip_combined/outer_accs_{suffix}{start_block}.npy', outer_accs)
-    np.save(f'output/ip_combined/inner_accs_{suffix}{start_block}.npy', inner_accs)
+    np.save(f'{OUTPUT_DIR}outer_accs_{suffix}{start_block}.npy', outer_accs)
+    np.save(f'{OUTPUT_DIR}inner_accs_{suffix}{start_block}.npy', inner_accs)
   
 end = time.time()
 print(f'Done in {round((end-start)/60, 2)} minutes.')

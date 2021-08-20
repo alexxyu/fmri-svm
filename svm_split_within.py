@@ -17,13 +17,13 @@ from joblib import Parallel, delayed
 """
 Simulation settings
 """
-OUTPUT_DIR = 'output/ip_combined/mt/'
+OUTPUT_DIR = 'output/ip_combined/within/mt/'
 INNER_TEST_SIZE = 6
 OUTER_TEST_SIZE = 2
 
 path = 'scans/ip_only_data.mat'
 roi = 1                            # V1-roi: 0, MT-roi: 1
-n_cores = 12
+n_cores = 8
 
 def df_to_arr(df):
     vals = []
