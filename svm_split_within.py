@@ -7,6 +7,7 @@ import itertools
 import scipy.io
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
@@ -16,10 +17,13 @@ from joblib import Parallel, delayed
 """
 Simulation settings
 """
+OUTPUT_DIR = 'output/ip_combined/mt/'
+INNER_TEST_SIZE = 6
+OUTER_TEST_SIZE = 2
 
 path = 'scans/ip_only_data.mat'
 roi = 1                            # V1-roi: 0, MT-roi: 1
-n_cores = 4
+n_cores = 12
 
 def df_to_arr(df):
     vals = []
@@ -82,11 +86,11 @@ def extract_tr_subject_data(mat, subject, roi):
                     for tr in range(len(mat[0][sub_run][0][roi][0][scan][0][cond][0][block][0])):
                         tr_data = mat[0][sub_run][0][roi][0][scan][0][cond][0][block][0][tr][0][0][0].tolist()
                         
-                        if tr == 0 or tr == len(mat[0][sub_run][0][roi][0][scan][0][cond][0][block][0]) - 1:
+                        if tr == 0 or tr == len(mat[0][sub_run][0][roi][0][scan][0][cond][0][block][0])-1:
                             test_trs.append(len(x_data))
                             
                         x_data.append(tr_data)
-                        y_data.append(mat[0][sub_run][0][roi][0][scan][1][cond][0].replace('_large', '').replace('_small', ''))
+                        y_data.append('untrained' if 'untrained' in mat[0][sub_run][0][roi][0][scan][1][cond][0] else 'trained')
 
         if is_post_run:
             post_test_trs = test_trs.copy()
@@ -97,6 +101,7 @@ def extract_tr_subject_data(mat, subject, roi):
     # MinMaxScaler scales each feature to values between 0 and 1 among all x data
     scaler = MinMaxScaler(feature_range=(0, 1))
     x_standardized = scaler.fit_transform(x_data)
+    print(f"Dataset size: {len(x_standardized)}")
 
     # Separate training, pre-testing, and post-testing data
     pre_test_x_data, pre_test_y_data = [], []
@@ -114,31 +119,36 @@ def extract_tr_subject_data(mat, subject, roi):
         if i not in test_trs:
             train_x_data.append(x_standardized[i])
             train_y_data.append(y_data[i])
-    
+  
     pre_data = {'train_x': train_x_data, 'train_y': train_y_data, 'test_x': pre_test_x_data, 'test_y': pre_test_y_data}
     post_data = {'train_x': [], 'train_y': [], 'test_x': post_test_x_data, 'test_y': post_test_y_data}
+
     return pre_data, post_data
 
 def split_tr_dataset(data):
     train_x, inner_test_x, outer_test_x, train_y, inner_test_y, outer_test_y = [], [], [], [], [], []
-    
+    if len(data['test_x']) == 0:
+        return [], [],[],[],[],[]
     # Split test data into outer loop TRs and inner loop TRs
     test_indices = [i for i in range(len(data['test_x']))]
-    test_indices, outer_test_indices, test_y, outer_test_y = train_test_split(test_indices, data['test_y'], test_size=2, stratify=data['test_y'])
+    test_indices, outer_test_indices, test_y, outer_test_y = train_test_split(test_indices, data['test_y'], test_size=OUTER_TEST_SIZE, stratify=data['test_y'])
 
     # Separate outer loop TRs and remove same block TRs from inner test list
     for i in outer_test_indices:
-        if i%2 == 0:
-            index_to_remove = test_indices.index(i+1)
-        else:
-            index_to_remove = test_indices.index(i-1)
-        del test_y[index_to_remove]
-        del test_indices[index_to_remove]
-        train_x.append(data['test_x'][index_to_remove])
-        train_y.append(data['test_y'][index_to_remove])
+        try:
+            if i%2 == 0:
+                index_to_remove = test_indices.index(i+1)
+            else:
+                index_to_remove = test_indices.index(i-1)
+            del test_y[index_to_remove]
+            del test_indices[index_to_remove]
+            train_x.append(data['test_x'][index_to_remove])
+            train_y.append(data['test_y'][index_to_remove])
+        except:
+            pass
 
     # Split test data into inner loop TRs and rest
-    train_indices, inner_test_indices, _, inner_test_y = train_test_split(test_indices, test_y, test_size=6, stratify=test_y)
+    train_indices, inner_test_indices, _, inner_test_y = train_test_split(test_indices, test_y, test_size=INNER_TEST_SIZE, stratify=test_y)
     
     outer_test_x = [data['test_x'][i] for i in outer_test_indices]
     inner_test_x = [data['test_x'][i] for i in inner_test_indices]
@@ -180,20 +190,17 @@ def train_within_subjects_combined(data_params, grid_params, runs=200):
         print(f"Training data size: {len(x_train)}")
         print(f"Inner testing data size: {len(x_test_inner)}")
         print(f"Outer testing data size: {len(x_test_outer)}")
-        
-        for run in range(runs):
-            if (run+1) % 10 == 0:
-                print(f"On run #{run+1} of {runs}.")
-                
+       
+        for run in tqdm(range(runs)):
             x_train_pre, x_test_inner_pre, x_test_outer_pre, y_train_pre, y_test_inner_pre, y_test_outer_pre = split_tr_dataset(subject_data_pre)
             x_train_post, x_test_inner_post, x_test_outer_post, y_train_post, y_test_inner_post, y_test_outer_post = split_tr_dataset(subject_data_post)
-            
+           
             # Combine data for training and inner testing
             x_train = x_train_pre + x_train_post
             x_test_inner = x_test_inner_pre + x_test_inner_post
             y_train = y_train_pre + y_train_post
             y_test_inner = y_test_inner_pre + y_test_inner_post
-            
+
             # Gets optimal params for training dataset from grid search
             opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test_inner, y_test_inner, grid_params['kernels'], grid_params['gamma'], grid_params['C']) 
 
@@ -209,9 +216,9 @@ def train_within_subjects_combined(data_params, grid_params, runs=200):
             outer_acc_report_pre.at[subject, run] = outer_acc_pre
             outer_acc_report_post.at[subject, run] = outer_acc_post
         
-        inner_acc_report.to_csv(f'output/ip_combined/inner_accs_within.csv')
-        outer_acc_report_pre.to_csv(f'output/ip_combined/outer_accs_pre_within.csv')
-        outer_acc_report_post.to_csv(f'output/ip_combined/outer_accs_post_within.csv')
+        inner_acc_report.to_csv(f'{OUTPUT_DIR}inner_accs_within.csv')
+        outer_acc_report_pre.to_csv(f'{OUTPUT_DIR}outer_accs_pre_within.csv')
+        outer_acc_report_post.to_csv(f'{OUTPUT_DIR}outer_accs_post_within.csv')
 
         # Prints how long it took for last outer subject test
         end_time = time.time()
@@ -226,15 +233,19 @@ gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 19, 'base': 2.0}
 kernels = ['rbf', 'sigmoid']
 
+#gamma_range = {'start': -11, 'stop': 1, 'num': 5, 'base': 10.0}
+#C_range = {'start': -4, 'stop': 8, 'num': 5, 'base': 10.0}
+#kernels = ['rbf']
+
 data_params = {'path': path, 'roi': roi}
 grid_params = {'gamma': gamma_range, 'C': C_range, 'kernels': kernels}
 
 start = time.time()
 
 inner_accs, outer_accs_pre, outer_accs_post = train_within_subjects_combined(data_params, grid_params)
-inner_accs.to_csv(f'output/ip_combined/inner_accs_within.csv')
-outer_accs_pre.to_csv(f'output/ip_combined/outer_accs_pre_within.csv')
-outer_accs_post.to_csv(f'output/ip_combined/outer_accs_post_within.csv')
+inner_accs.to_csv(f'{OUTPUT_DIR}inner_accs_within.csv')
+outer_accs_pre.to_csv(f'{OUTPUT_DIR}outer_accs_pre_within.csv')
+outer_accs_post.to_csv(f'{OUTPUT_DIR}outer_accs_post_within.csv')
 
 end = time.time()
 print(f'Done in {round((end-start)/60, 2)} minutes.')
