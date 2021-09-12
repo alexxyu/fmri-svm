@@ -63,7 +63,6 @@ def extract_tr_subject_data(mat, subject, roi):
     x_data = []
     y_data = []
     
-    split = 0
     test_trs, pre_test_trs, post_test_trs = [], [], []
 
     subject_runs = []

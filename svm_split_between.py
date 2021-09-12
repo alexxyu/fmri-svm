@@ -1,6 +1,5 @@
 import time
 import math
-import random
 import itertools
 import scipy.io
 import numpy as np
@@ -30,26 +29,6 @@ def get_subjects(path):
     subjects = list(set([s[0][:2] for s in mat[1]]))
     subjects.sort()
     return subjects
-
-def scramble_labels(y_data):
-    classes = list(set(y_data))
-    classes.sort()
-    
-    y_data_copy = y_data.copy()
-    to_change = random.sample([i for i, x in enumerate(y_data) if x == classes[0]], k=len(y_data)//4)
-    to_change.extend(random.sample([i for i, x in enumerate(y_data) if x == classes[1]], k=len(y_data)//4))
-    
-    for index in to_change:
-        
-        if y_data[index] == classes[0]:
-            y_data[index] = classes[1]
-        else:
-            y_data[index] = classes[0]
-    
-    # Makes sure labels are scrambled properly
-    num_diff = sum(i != j for i, j in zip(y_data, y_data_copy))  
-    if num_diff != len(y_data)//2:
-        raise ValueError
     
 def get_min_max_block_length(path, roi):
     min_bl, max_bl = math.inf, 0
@@ -147,7 +126,7 @@ def generate_dataset(mat, subjects, roi, block_length, rank_block, use_abs_to_ra
     
     return x_data_by_subject, y_data_by_subject
 
-def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
+def split_dataset(x_data, y_data, inner_subjects, outer_subject):
     x_train = []
     y_train = []
     
@@ -166,12 +145,7 @@ def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
             y_test_inner.extend(y_data[subject])
         else:
             x_train.extend(x_data[subject])
-            if scramble:
-                y_scrambled = y_data[subject].copy()
-                scramble_labels(y_scrambled)
-                y_train.extend(y_scrambled)
-            else:
-                y_train.extend(y_data[subject])
+            y_train.extend(y_data[subject])
             
     return x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer
 
@@ -204,7 +178,7 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
     
     return best_params, best_acc
 
-def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, use_abs_to_rank=False):
+def train(data_params, grid_params, num_inner=1, rank_block=1, use_abs_to_rank=False):
     subjects = get_subjects(data_params['path'])
     mat = scipy.io.loadmat(data_params['path'])['ipOnly_roi_scanData']
     bmin, bmax = get_min_max_block_length(data_params['path'], data_params['roi'])
@@ -216,10 +190,6 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
     
     for outer_subject_idx in tqdm(range(len(subjects))):
         outer_subject = subjects[outer_subject_idx]
-
-        opt_inner_params = None
-        opt_inner_acc = -1
-        
         inner_subjects = [s for s in subjects if s != outer_subject]
         
         # Iterate through inner folds
@@ -227,7 +197,7 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
             
             inner_test_subjects = list(inner_test_subjects)
             
-            x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer = split_dataset(x_data, y_data, inner_test_subjects, outer_subject, scramble)
+            x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer = split_dataset(x_data, y_data, inner_test_subjects, outer_subject)
             
             # Gets optimal params for training dataset from grid search
             opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test_inner, y_test_inner, grid_params['kernels'], grid_params['gamma'], grid_params['C']) 
@@ -239,15 +209,9 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
                 # Trains model using optimal params for this set
                 svclassifier = SVC(kernel=opt_params['kernel'], gamma=opt_params['gamma'], C=opt_params['C'], max_iter=-1)
                 svclassifier.fit(x_train, y_train)
-                
-                # Track optimal params among all inner folds
-                if inner_acc > opt_inner_acc:
-                    opt_inner_acc = inner_acc
-                    opt_inner_params = opt_params
-                    
                 inner_acc_report.append(inner_acc)
 
-            # Test outer subject using optimal params across all inner folds
+            # Test outer subject using optimal params for inner fold
             svclassifier = SVC(kernel=opt_params['kernel'], gamma=opt_params['gamma'], C=opt_params['C'], max_iter=-1)
             svclassifier.fit(x_train, y_train)
         
