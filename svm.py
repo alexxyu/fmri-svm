@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import time
@@ -10,7 +10,6 @@ import scipy.io
 import numpy as np
 from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
 from sklearn.model_selection import ParameterGrid
 from joblib import Parallel, delayed
 
