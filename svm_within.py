@@ -1,21 +1,14 @@
 #!/usr/bin/python
 
 import os
-import sys
-import copy
 import time
-import math
 import json
 import random
 import argparse
-import itertools
 import scipy.io
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
 from sklearn.model_selection import ParameterGrid
 from joblib import Parallel, delayed
 
@@ -69,8 +62,6 @@ def scramble_labels(y_data):
     
     classes = list(set(y_data))
     classes.sort()
-    
-    y_data_copy = y_data.copy()
     
     labels_0 = [i for i, x in enumerate(y_data) if x == classes[0]]
     labels_1 = [i for i, x in enumerate(y_data) if x == classes[1]]
