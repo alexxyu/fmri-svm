@@ -1,5 +1,2 @@
-
-.DS_Store
-scans/.DS_Store
-scans/output/.DS_Store
-SVM Classifier-Copy1.ipynb
+*.DS_Store
+.ipynb_checkpoints/*
