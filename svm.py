@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
 import os
-import time
 import math
 import random
 import argparse
@@ -528,10 +527,7 @@ if args.permute:
     np.save(f'{output_path}/inner_perms.npy', inner_dist)
 
 else:
-    start = time.time()
     result = Parallel(n_jobs=num_cores)(delayed(train)(data_params, grid_params, rank_block=i) for i in range(1, block_count+1))
-    end = time.time()
-    print(f'Done in {round((end-start)/60, 2)} minutes.')
 
     inner_accs = []
     outer_accs = []
