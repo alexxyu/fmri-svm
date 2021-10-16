@@ -8,74 +8,41 @@ import argparse
 import itertools
 import scipy.io
 import numpy as np
+from tqdm import tqdm
 from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import ParameterGrid
 from joblib import Parallel, delayed
 
-'''
+"""
 Constants
-'''
-
+"""
 gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 19, 'base': 2.0}
 kernels = ['rbf', 'sigmoid']
 
-def df_to_arr(df):
-    vals = []
-    for _, row in df.iterrows():
-        vals.extend(row.tolist())
-    return np.array([x for x in vals if str(x) != 'nan'])
-
-def get_subjects(path):
-    
-    '''
+def get_subjects(path):    
+    """
     Gets a list of subject IDs and the file suffix, given a path to the data files. 
-    
-    Note: subject ID must be only 2 characters for this to work, and all data files
-    must have same suffix.
-    
-    Parameters
-    ----------
-    path: str
-        directory to the data files
-        
-    Returns
-    -------
-    list
-        a list of subject IDs
-    str
-        the suffix to the filenames
-    '''
+    """
     
     files = os.listdir(path)
-    subjects = [f[:2] for f in files]
+    subjects = sorted([f[:2] for f in files])
     suffix = files[0][2:]
-        
-    subjects.sort()
-    
     return subjects, suffix
 
 def scramble_labels(y_data):
-    
-    '''
+    """
     Randomly selects half of the labels in the data to switch to the other class.
+    """
     
-    Parameters
-    ----------
-    y_data: array-like
-        label data to scramble
-    '''
-    
-    classes = list(set(y_data))
-    classes.sort()
+    classes = sorted(list(set(y_data)))
     
     y_data_copy = y_data.copy()
     to_change = random.sample([i for i, x in enumerate(y_data) if x == classes[0]], k=len(y_data)//4)
     to_change.extend(random.sample([i for i, x in enumerate(y_data) if x == classes[1]], k=len(y_data)//4))
     
     for index in to_change:
-        
         if y_data[index] == classes[0]:
             y_data[index] = classes[1]
         else:
@@ -87,8 +54,7 @@ def scramble_labels(y_data):
         raise ValueError
 
 def get_min_max_block_length(path, subjects, suffix, roi, conds):
-    
-    '''
+    """
     Gets the minimum and maximum lengths of the blocks in the data.
     
     Parameters
@@ -110,7 +76,7 @@ def get_min_max_block_length(path, subjects, suffix, roi, conds):
         minimum block length
     int
         maxmimum block length
-    '''
+    """
     
     min_bl, max_bl = math.inf, 0
     for subject in subjects:
@@ -118,14 +84,12 @@ def get_min_max_block_length(path, subjects, suffix, roi, conds):
         path_to_file = path + subject + suffix
         mat = scipy.io.loadmat(path_to_file)['roi_scanData'][0][roi]
 
-        for scan in range(len(mat[0])):
+        for scan in mat[0]:
             for cond in conds:
-                for block in range(len(mat[0][scan][0][cond][0])):
-        
+                for block in scan[0][cond][0]:
                     block_data = []
-                    for tr in range(len(mat[0][scan][0][cond][0][block][0])):
-                        block_data.extend(mat[0][scan][0][cond][0][block][0][tr][0][0][0].tolist())
-                    
+                    for tr in block[0]:
+                        block_data.extend(tr[0][0][0].tolist())
                     min_bl = min(min_bl, len(block_data))
                     max_bl = max(max_bl, len(block_data))
                     
@@ -134,81 +98,8 @@ def get_min_max_block_length(path, subjects, suffix, roi, conds):
 
     return min_bl, max_bl
 
-def extract_subject_data_by_shortest(path, subject, suffix, roi, conds, block_length, use_abs_to_rank):
-    
-    '''
-    Extracts individual subject data from the .mat files. Rank-orders based on 
-    shortest block in subject.
-    
-    Parameters
-    ----------
-    path: str
-        directory to data files
-    subject: str
-        ID of subject to load data for
-    suffix: str
-        ending suffix of the data filename
-    roi: int
-        0 for V1 data, 1 for MT data
-    conds: list
-        list of integers specifying the conditional datasets to extract
-        (0 for trained_cp, 1 for trained_ip, 2 for untrained_cp, 3 for untrained_ip)
-    block_length: int
-        the number of voxels to standardize every block in the dataset to
-    use_abs_to_rank: boolean
-        whether to use greatest absolute voxel values to rank-order vectors; 
-        otherwise, use most positive voxel values
-        
-    Returns
-    -------
-    Lists of voxel data (x_data) separated by individual blocks and the corresponding 
-    labels (y_data)
-    '''
-    
-    x_data = []
-    y_data = []
-    
-    path_to_file = path + subject + suffix
-    mat = scipy.io.loadmat(path_to_file)['roi_scanData'][0][roi]
-    
-    ranked_indices = None
-    
-    # Run through and find shortest subject block
-    shortest_block_length = math.inf
-    for scan in range(len(mat[0])):
-
-        for cond in conds:
-
-            blocks = [x for x in range(len(mat[0][scan][0][cond][0]))]
-
-            for block in blocks:
-                block_data = []
-                for tr in range(len(mat[0][scan][0][cond][0][block][0])):
-                    # Extract all voxel data from individual TRs
-                    block_data.extend(mat[0][scan][0][cond][0][block][0][tr][0][0][0].tolist())
-                    
-                if len(block_data) < shortest_block_length:
-                    shortest_block_length = min(shortest_block_length, len(block_data))
-                    
-                    if use_abs_to_rank:
-                        ranked_indices = [i for i in (np.array([abs(n) for n in block_data])).argsort(kind='mergesort')[-block_length:]]
-                        ranked_indices = np.flip(ranked_indices)
-                    else:
-                        ranked_indices = [i for i in (-np.array(block_data)).argsort(kind='mergesort')[:block_length]]
-    
-                x_data.append(block_data)
-                y_data.append('untrained' if 'untrained' in mat[0][scan][1][cond][0] else 'trained')
-    
-    # Run through and rank-order based on shortest subject block            
-    for block_n in range(len(x_data)):
-        x_data[block_n] = [x_data[block_n][i] for i in ranked_indices]
-    
-    data = {'x': x_data, 'y': y_data}
-    return data
-
 def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_block, use_abs_to_rank):
-    
-    '''
+    """
     Extracts individual subject data from the .mat files. Rank-orders based on
     specific block number within subject.
     
@@ -238,7 +129,7 @@ def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_b
     -------
     Lists of voxel data (x_data) separated by individual blocks and the corresponding 
     labels (y_data)
-    '''
+    """
     
     x_data = []
     y_data = []
@@ -249,18 +140,14 @@ def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_b
     ranked_indices = None
     
     block_count = 0
-    for scan in range(len(mat[0])):
-
+    for scan in mat[0]:
         for cond in conds:
-
-            blocks = [x for x in range(len(mat[0][scan][0][cond][0]))]
-
-            for block in blocks:
+            for block in scan[0][cond][0]:
                 block_count += 1
                 block_data = []
-                for tr in range(len(mat[0][scan][0][cond][0][block][0])):
+                for tr in block[0]:
                     # Extract all voxel data from individual TRs
-                    block_data.extend(mat[0][scan][0][cond][0][block][0][tr][0][0][0].tolist())
+                    block_data.extend(tr[0][0][0].tolist())
                 
                 if block_count == rank_block:
                     if use_abs_to_rank:    
@@ -270,7 +157,7 @@ def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_b
                         ranked_indices = [i for i in (-np.array(block_data)).argsort(kind='mergesort')[:block_length]]
     
                 x_data.append(block_data)
-                y_data.append('untrained' if 'untrained' in mat[0][scan][1][cond][0] else 'trained')
+                y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
     
     # Run through and rank-order based on subject block  
     for block_n in range(len(x_data)):
@@ -280,8 +167,7 @@ def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_b
     return data
 
 def generate_dataset(subjects, path, suffix, roi, conds, block_length, rank_block, use_abs_to_rank):
-    
-    '''
+    """
     Generates entire dataset from subject list, partitioned by subject.
     
     Parameters
@@ -312,15 +198,13 @@ def generate_dataset(subjects, path, suffix, roi, conds, block_length, rank_bloc
         voxel data with subject key
     dict
         label data with subject key
-    '''
+    """
     
     x_data = []
-    
     x_data_indices = []
     y_data_by_subject = dict()
     
     for subject in subjects:
-        
         subject_data = extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_block, use_abs_to_rank)
         x_data_indices.append(len(x_data))
         y_data_by_subject[subject] = subject_data['y']
@@ -346,8 +230,7 @@ def generate_dataset(subjects, path, suffix, roi, conds, block_length, rank_bloc
     return x_data_by_subject, y_data_by_subject
 
 def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
-    
-    '''
+    """
     Splits voxel and label data into appropriate testing and training data for nested
     cross-validation with SVM.
     
@@ -379,7 +262,7 @@ def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
         blocks of voxel data from outer test subject for testing use
     list
         labels for outer test subject    
-    '''
+    """
     
     x_train = []
     y_train = []
@@ -409,8 +292,7 @@ def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
     return x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer
 
 def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_range):
-    
-    '''
+    """
     Gets best hyperparameters (kernel, C, and gamma values) that optimize SVM's predictions for given
     x and y test dataset.
     
@@ -439,11 +321,10 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
         best combination of parameters found from grid search
     float
         best accuracy obtained from testing
-    '''
+    """
     
     gamma_vals = np.logspace(gamma_range['start'], gamma_range['stop'], gamma_range['num'], base=gamma_range['base'])
     C_vals = np.logspace(C_range['start'], C_range['stop'], C_range['num'], base=C_range['base'])
-
     param_grid = ParameterGrid({'kernel': kernels, 'gamma': gamma_vals, 'C': C_vals})
     
     best_acc = 0
@@ -451,12 +332,10 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
     
     # Tests each parameter combination to find best one for given testing data
     for params in list(param_grid):
-        
         svclassifier = SVC(kernel=params['kernel'], gamma=params['gamma'], C=params['C'], max_iter=-1)
         svclassifier.fit(x_train, y_train)
-        
+
         curr_acc = svclassifier.score(x_test, y_test)
-        
         if curr_acc > best_acc:
             best_acc = curr_acc
             best_params = params
@@ -464,8 +343,7 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
     return best_params, best_acc
 
 def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, use_abs_to_rank=False):
-    
-    '''
+    """
     Trains and tests the classifier for accuracy using SVMs.
     
     Parameters
@@ -508,30 +386,22 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
         data of inner subject combination testing accuracy
     list
         data of outer subject testing accuracy
-    '''
+    """
     
-    start_time = time.time()
     subjects, suffix = get_subjects(data_params['path'])
-    
-    bmin, bmax = get_min_max_block_length(data_params['path'], subjects, suffix, data_params['roi'], data_params['conds'])
-    block_length = bmin
+    block_length, _ = get_min_max_block_length(data_params['path'], subjects, suffix, data_params['roi'], data_params['conds'])
     x_data, y_data = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'], block_length, rank_block, use_abs_to_rank)
         
     inner_acc_report = []
     outer_acc_report = []
-    
-    for outer_subject in subjects:
-        
-        print(f"Currently on outer subject #{subjects.index(outer_subject)+1}.")
-
+    for outer_subject in tqdm(subjects, leave=(not scramble)):
         opt_inner_params = None
         opt_inner_acc = -1
-        
+
         inner_subjects = [s for s in subjects if s != outer_subject]
         
         # Iterate through inner folds
         for inner_test_subjects in itertools.combinations((inner_subjects), num_inner):
-            
             inner_test_subjects = list(inner_test_subjects)
             
             x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer = split_dataset(x_data, y_data, inner_test_subjects, outer_subject, scramble)
@@ -561,17 +431,11 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
         
         outer_acc = svclassifier.score(x_test_outer, y_test_outer)
         outer_acc_report.append(outer_acc)
-        
-    # Prints how long it took for last outer subject test
-    end_time = time.time()
-    exec_time = end_time - start_time
-    print(f"Completed in {round(exec_time/60, 2)} minutes.")
     
     return inner_acc_report, outer_acc_report
 
 def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cores=1, num_rank_blocks=1, output_path=''):
-    
-    '''
+    """
     Performs a specified number of runs where data labels are scrambled.
     
     Parameters
@@ -594,27 +458,22 @@ def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cor
     output_path: str
         path to which files should be saved,
         default is current directory
-    '''
+    """
         
-    for n in range(runs):
-
-        print(f'On run {n+1} of {runs}.')
-        
-        start = time.time()
+    for _ in tqdm(range(runs)):
         result = Parallel(n_jobs=n_cores)(delayed(train)(data_params, grid_params, scramble=True, rank_block=i) for i in range(1, num_rank_blocks+1))
-        end = time.time()
-        print(f'Done in {round((end-start)/60, 2)} minutes.')
 
         for rank_result in result:
-            inner_result = rank_result[0]
-            outer_result = rank_result[1]
-            
+            inner_result, outer_result = rank_result
             inner_dist.append(inner_result)
             outer_dist.append(outer_result)
 
         np.save(f'{output_path}/outer_perms.npy', outer_dist)
         np.save(f'{output_path}/inner_perms.npy', inner_dist)
 
+"""
+Parse arguments and run appropriate analysis
+"""
 parser = argparse.ArgumentParser()
 parser.add_argument("indir", metavar="INDIR", help="directory to input data")
 parser.add_argument("outdir", metavar="OUTDIR", help="directory to output data")
