@@ -1,67 +1,40 @@
 #!/usr/bin/python3
 
 import os
-import time
-import json
 import random
 import argparse
 import scipy.io
 import numpy as np
+from tqdm import tqdm
 from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
 from sklearn.model_selection import ParameterGrid
 from joblib import Parallel, delayed
 
-'''
+"""
 Constants
-'''
-
+"""
 gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 19, 'base': 2.0}
 kernels = ['rbf', 'sigmoid']
 
 def get_subjects(path):
-    
-    '''
+    """
     Gets a list of subject IDs and the file suffix, given a path to the data files. 
-    
-    Note: subject ID must be only 2 characters for this to work, and all data files
-    must have same suffix.
-    
-    Parameters
-    ----------
-    path: str
-        directory to the data files
-        
-    Returns
-    -------
-    list
-        a list of subject IDs
-    str
-        the suffix to the filenames
-    '''
+    """
     
     files = os.listdir(path)
-    subjects = [f[:2] for f in files]
+    subjects = sorted([f[:2] for f in files])
     suffix = files[0][2:]
-        
-    subjects.sort()
-    
     return subjects, suffix
 
 def scramble_labels(y_data):
-    
-    '''
+    """
     Randomly selects half of the labels in the data to switch to the other class.
+    """
     
-    Parameters
-    ----------
-    y_data: array-like
-        label data to scramble
-    '''
-    
-    classes = list(set(y_data))
-    classes.sort()
+    classes = sorted(list(set(y_data)))
     
     labels_0 = [i for i, x in enumerate(y_data) if x == classes[0]]
     labels_1 = [i for i, x in enumerate(y_data) if x == classes[1]]
@@ -75,8 +48,7 @@ def scramble_labels(y_data):
             y_data[index] = classes[0]
 
 def extract_tr_subject_data(path, subject, suffix, roi, conds):
-    
-    '''
+    """
     Extracts individual subject data from the .mat files.
     
     Parameters
@@ -96,49 +68,50 @@ def extract_tr_subject_data(path, subject, suffix, roi, conds):
     Returns
     -------
     Lists of voxel data (x_data) separated by individual TRs and the corresponding labels (y_data)
-    '''
+    """
     
     x_data = []
     y_data = []
     
     path_to_file = path + subject + suffix
     mat = scipy.io.loadmat(path_to_file)['roi_scanData'][0][roi]
-    block_indices = []
-
+    
     # Extract all TR data from all blocks from all scans
-    for scan in range(len(mat[0])):
-
+    test_TRs = []
+    for scan in mat[0]:
         for cond in conds:
-            
-            for block in range(len(mat[0][scan][0][cond][0])):
-                
-                for tr in range(len(mat[0][scan][0][cond][0][block][0])):
-
-                    tr_data = mat[0][scan][0][cond][0][block][0][tr][0][0][0].tolist()
+            for block in scan[0][cond][0]:
+                for tr_idx, tr in enumerate(block[0]):
+                    tr_data = tr[0][0][0].tolist()
+                    
+                    if tr_idx == 0 or tr_idx == len(block[0]) - 1:
+                        test_TRs.append(len(x_data))
+                        
                     x_data.append(tr_data)
-                    y_data.append(mat[0][scan][1][cond][0].replace('_post', ''))
-                
-                block_indices.append(len(x_data))
+                    y_data.append(scan[1][cond][0].replace('_post', ''))
     
     # MinMaxScaler scales each feature to values between 0 and 1 among all x data
     scaler = MinMaxScaler(feature_range=(0, 1))
-    x_data = scaler.fit_transform(x_data)
+    x_standardized = scaler.fit_transform(x_data)        
     
-    x_data_by_block = {}
-    y_data_by_block = {}
-    for block_id, idx in enumerate(block_indices):
-        if idx == block_indices[0]:
-            x_data_by_block[block_id] = x_data[0:idx]
-            y_data_by_block[block_id] = y_data[0:idx]
-        else:
-            x_data_by_block[block_id] = x_data[block_indices[block_id-1]:idx]
-            y_data_by_block[block_id] = y_data[block_indices[block_id-1]:idx]
+    test_x_data = []
+    test_y_data = []
+    for i in test_TRs:
+        test_x_data.append(x_standardized[i])
+        test_y_data.append(y_data[i])
     
-    return x_data_by_block, y_data_by_block
+    train_x_data = []
+    train_y_data = []
+    for i in range(len(x_standardized)):
+        if i not in test_TRs:
+            train_x_data.append(x_standardized[i])
+            train_y_data.append(y_data[i])
+    
+    data = {'train_x': train_x_data, 'train_y': train_y_data, 'test_x': test_x_data, 'test_y': test_y_data}
+    return data
 
 def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_range, n_cores):
-    
-    '''
+    """
     Gets best hyperparameters (kernel, C, and gamma values) that optimize SVM's predictions for given
     x and y test dataset.
     
@@ -167,11 +140,10 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
         best combination of parameters found from grid search
     float
         best accuracy obtained from testing
-    '''
+    """
     
     gamma_vals = np.logspace(gamma_range['start'], gamma_range['stop'], gamma_range['num'], base=gamma_range['base'])
     C_vals = np.logspace(C_range['start'], C_range['stop'], C_range['num'], base=C_range['base'])
-
     param_grid = ParameterGrid({'kernel': kernels, 'gamma': gamma_vals, 'C': C_vals})
 
     def evaluate_acc(params):
@@ -184,7 +156,6 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
 
     best_acc = 0
     best_params = None
-
     for result in search:
         if result[0] > best_acc:
             best_acc = result[0]
@@ -192,9 +163,69 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
             
     return best_params, best_acc
 
-def train(data_params, grid_params, scramble=False, n_cores=1):
+def split_tr_dataset(data, scramble):
+    """
+    Splits the TR dataset into inner testing, outer testing, and training folds.
     
-    '''
+    Parameters
+    ----------
+    data: dict
+        dictionary that contains data split into training and testing partition
+    scramble: boolean
+        whether or not to scramble the labels when training
+        
+    Returns
+    -------
+    list
+        TR voxel data for training use
+    list
+        TR voxel data for inner fold testing use
+    list
+        TR voxel data for outer fold testing use
+    list 
+        labels for training use
+    list
+        labels for inner fold testing use
+    list
+        labels for outer fold testing use
+    """
+    
+    train_x, inner_test_x, outer_test_x, train_y, inner_test_y, outer_test_y = [], [], [], [], [], []
+    
+    # Split test data into outer loop TRs and inner loop TRs
+    test_indices = [i for i in range(len(data['test_x']))]
+    test_indices, outer_test_indices, test_y, outer_test_y = train_test_split(test_indices, data['test_y'], test_size=2, stratify=data['test_y'])
+
+    # Separate outer loop TRs and remove same block TRs from inner test list
+    for i in outer_test_indices:
+        if i%2 == 0:
+            index_to_remove = test_indices.index(i+1)
+        else:
+            index_to_remove = test_indices.index(i-1)
+        del test_y[index_to_remove]
+        del test_indices[index_to_remove]
+        train_x.append(data['test_x'][index_to_remove])
+        train_y.append(data['test_y'][index_to_remove])
+
+    # Split test data into inner loop TRs and rest
+    train_indices, inner_test_indices, _, inner_test_y = train_test_split(test_indices, test_y, test_size=6, stratify=test_y)
+    
+    outer_test_x = [data['test_x'][i] for i in outer_test_indices]
+    inner_test_x = [data['test_x'][i] for i in inner_test_indices]
+    
+    # Set up rest of training data with leftover unused TRs
+    train_x.extend([data['test_x'][i] for i in train_indices])
+    train_x.extend(data['train_x'])
+    train_y.extend([data['test_y'][i] for i in train_indices])
+    train_y.extend(data['train_y'])
+
+    if scramble:
+        scramble_labels(train_y)
+    
+    return train_x, inner_test_x, outer_test_x, train_y, inner_test_y, outer_test_y
+
+def train(data_params, grid_params, runs=200, scramble=False, n_cores=1):    
+    """
     Trains and tests the classifier for accuracy using SVMs.
     
     Parameters
@@ -216,6 +247,8 @@ def train(data_params, grid_params, scramble=False, n_cores=1):
         C: dict
             dict that specifies the range of values of C to test; should include start, stop to range,
             num of values, and the exponential base
+    runs: int
+        number of runs to test on for each subject
     scramble: boolean, optional
         whether or not to scramble the labels when training, 
         default is False
@@ -226,70 +259,46 @@ def train(data_params, grid_params, scramble=False, n_cores=1):
         data of inner subject combination testing accuracy
     DataFrame
         data of outer subject testing accuracy
-    '''
+    """
     
     subjects, suffix = get_subjects(data_params['path'])
-    inner_result = {}
-    outer_result = {}
+    inner_result = []
+    outer_result = []
     
-    start_time = time.time()
     for subject in subjects:
-        
-        inner_result[subject] = []
-        outer_result[subject] = []
-        
         print(f"Currently on subject {subject}.")
-        
-        x_data, y_data = extract_tr_subject_data(path, subject, suffix, roi, conds)
-        samples = x_data.keys()
-        for outer_sample in samples:
+
+        subject_data = extract_tr_subject_data(path, subject, suffix, roi, conds)
+        x_train, x_test_inner, x_test_outer, y_train, y_test_inner, y_test_outer = split_tr_dataset(subject_data, scramble)
+        print(f"Training data size: {len(x_train)}")
+        print(f"Inner testing data size: {len(x_test_inner)}")
+        print(f"Outer testing data size: {len(x_test_outer)}")
+
+        inner_result_subject = []
+        outer_result_subject = []
+        for _ in tqdm(range(runs), leave=(not scramble)):
+            x_train, x_test_inner, x_test_outer, y_train, y_test_inner, y_test_outer = split_tr_dataset(subject_data, scramble)
             
-            inner_sample = [s for s in samples if s != outer_sample]
-            
-            opt_inner_acc = -1
-            opt_inner_params = None
-            for inner_sample in inner_sample:
-                
-                x_train, y_train, x_test, y_test = [], [], [], []
-                for sample in samples:
-                    if sample == inner_sample:
-                        x_test.extend(x_data[sample])
-                        y_test.extend(y_data[sample])
-                    elif sample != outer_sample:
-                        x_train.extend(x_data[sample])
-                        y_train.extend(y_data[sample])
-            
-                opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test, y_test, grid_params['kernels'], grid_params['gamma'], grid_params['C'], n_cores=n_cores) 
-                if inner_acc > opt_inner_acc:
-                    opt_inner_acc = inner_acc
-                    opt_inner_params = opt_params
-                    
-                inner_result[subject].append(inner_acc)
-                    
-            x_train, y_train, x_test, y_test = [], [], [], []
-            for sample in samples:
-                if sample == outer_sample:
-                    x_test.extend(x_data[sample])
-                    y_test.extend(y_data[sample])
-                else:
-                    x_train.extend(x_data[sample])
-                    y_train.extend(y_data[sample])
-                    
-            svclassifier = SVC(kernel=opt_inner_params['kernel'], gamma=opt_inner_params['gamma'], C=opt_inner_params['C'], max_iter=-1)
+            # Gets optimal params for training dataset from grid search
+            opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test_inner, y_test_inner, grid_params['kernels'], grid_params['gamma'], grid_params['C'], n_cores) 
+
+            # Trains model using optimal params for this set
+            svclassifier = SVC(kernel=opt_params['kernel'], gamma=opt_params['gamma'], C=opt_params['C'], max_iter=-1)
             svclassifier.fit(x_train, y_train)
-            outer_acc = svclassifier.score(x_test, y_test)
-            outer_result[subject].append(outer_acc)
             
-    end_time = time.time()
-    exec_time = end_time - start_time
-    minutes = exec_time // 60
-    print(f"Last turn took {round(minutes, 3)} minutes.")
+            outer_acc = svclassifier.score(x_test_outer, y_test_outer)
+            
+            # Logs inner and outer subject accuracy data in DataFrame
+            inner_result_subject.append(inner_acc)
+            outer_result_subject.append(outer_acc)
+
+        inner_result.append(inner_result_subject)
+        outer_result.append(outer_result_subject)
 
     return inner_result, outer_result
 
 def permutation(data_params, grid_params, inner_dist, outer_dist, runs=100, output_path='', n_cores=1):
-    
-    '''
+    """
     Performs a specified number of runs where data labels are scrambled.
     
     Parameters
@@ -304,26 +313,23 @@ def permutation(data_params, grid_params, inner_dist, outer_dist, runs=100, outp
         holds accuracy values for individual outer subject tests
     runs: int
         number of runs to perform, default is 100
-    '''
+    """
     
-    subjects, _ = get_subjects(data_params['path'])
     if inner_dist is None and outer_dist is None:
-        inner_dist = {subject: [] for subject in subjects}
-        outer_dist = {subject: [] for subject in subjects}
+        inner_dist = []
+        outer_dist = []
         
-    for n in range(runs):
-        print(f'On run #{n+1} of {runs}.')
+    for _ in tqdm(range(runs)):
         inner_accs, outer_accs = train(data_params, grid_params, scramble=True, n_cores=n_cores)
-        
-        for subject in inner_accs.keys():
-            inner_dist[subject].append(inner_accs)
-            outer_dist[subject].append(outer_accs)
+        inner_dist.append(inner_accs)
+        outer_dist.append(outer_accs)
 
-        with open(f'{output_path}/within_outer_perms.json', 'w') as f:
-            json.dump(outer_dist, f)
-        with open(f'{output_path}/within_inner_perms.json', 'w') as f:
-            json.dump(inner_dist, f)
+        np.save(f'{output_path}/within_outer_perms.npy', outer_dist)
+        np.save(f'{output_path}/within_inner_perms.npy', inner_dist)
 
+"""
+Parse arguments and run appropriate analysis
+"""
 parser = argparse.ArgumentParser()
 parser.add_argument("indir", metavar="INDIR", help="directory to input data")
 parser.add_argument("outdir", metavar="OUTDIR", help="directory to output data")
@@ -363,10 +369,8 @@ grid_params = {'gamma': gamma_range, 'C': C_range, 'kernels': kernels}
 
 if args.permute:
     try:
-        with open(f'{output_path}/within_outer_perms.json', 'r') as f:
-            outer_dist = json.load(f)
-        with open(f'{output_path}/within_inner_perms.json', 'r') as f:
-            inner_dist = json.load(f)
+        outer_dist = np.load(f'{output_path}/within_outer_perms.npy')
+        inner_dist = np.load(f'{output_path}/within_inner_perms.npy')
     except FileNotFoundError:
         print('Creating new permutation distribution...')
         inner_dist = None
@@ -374,19 +378,10 @@ if args.permute:
 
     permutation(data_params, grid_params, inner_dist, outer_dist, runs=run_count, output_path=output_path, n_cores=num_cores)
 
-    with open(f'{output_path}/within_outer_perms.json', 'w') as f:
-            json.dump(outer_dist, f)
-    with open(f'{output_path}/within_inner_perms.json', 'w') as f:
-        json.dump(inner_dist, f)
-
+    np.save(f'{output_path}/within_outer_perms.npy', outer_dist)
+    np.save(f'{output_path}/within_inner_perms.npy', inner_dist)
 else:
-    start = time.time()
     inner_result, outer_result = train(data_params, grid_params, n_cores=num_cores)
-    end = time.time()
-    print(f'Done in {round((end-start)/60, 2)} minutes.')
 
-    with open(f'{output_path}/within_outer_accs.json', 'w') as f:
-        json.dump(outer_result, f)
-
-    with open(f'{output_path}/within_inner_accs.json', 'w') as f:
-        json.dump(inner_result, f)
+    np.save(f'{output_path}/within_outer_accs.npy', outer_result)
+    np.save(f'{output_path}/within_inner_accs.npy', inner_result)
