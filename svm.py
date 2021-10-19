@@ -16,9 +16,14 @@ from joblib import Parallel, delayed
 """
 Constants
 """
+BLOCK_TR_LIMIT = 8
 gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 19, 'base': 2.0}
 kernels = ['rbf', 'sigmoid']
+
+# gamma_range = {'start': -11, 'stop': 1, 'num': 5, 'base': 10.0}
+# C_range = {'start': -4, 'stop': 8, 'num': 5, 'base': 10.0}
+# kernels = ['rbf']
 
 def get_subjects(path):    
     """
@@ -52,9 +57,9 @@ def scramble_labels(y_data):
     if num_diff != len(y_data)//2:
         raise ValueError
 
-def get_min_max_block_length(path, subjects, suffix, roi, conds):
+def get_min_max_tr_length(path, subjects, suffix, roi, conds):
     """
-    Gets the minimum and maximum lengths of the blocks in the data.
+    Gets the minimum and maximum lengths of the TRs in the data.
     
     Parameters
     ----------
@@ -77,7 +82,7 @@ def get_min_max_block_length(path, subjects, suffix, roi, conds):
         maxmimum block length
     """
     
-    min_bl, max_bl = math.inf, 0
+    min_trl, max_trl = math.inf, 0
     for subject in subjects:
         
         path_to_file = path + subject + suffix
@@ -86,18 +91,16 @@ def get_min_max_block_length(path, subjects, suffix, roi, conds):
         for scan in mat[0]:
             for cond in conds:
                 for block in scan[0][cond][0]:
-                    block_data = []
                     for tr in block[0]:
-                        block_data.extend(tr[0][0][0].tolist())
-                    min_bl = min(min_bl, len(block_data))
-                    max_bl = max(max_bl, len(block_data))
+                        min_trl = min(min_trl, len(tr[0][0][0]))
+                        max_trl = max(max_trl, len(tr[0][0][0]))
                     
-    print(f"Min block length: {min_bl}")
-    print(f"Max block length: {max_bl}")
+    print(f"Min TR length: {min_trl}")
+    print(f"Max TR length: {max_trl}")
 
-    return min_bl, max_bl
+    return min_trl, max_trl
 
-def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_block, use_abs_to_rank):
+def extract_subject_data(path, subject, suffix, roi, conds, tr_length, rank_block, use_abs_to_rank):
     """
     Extracts individual subject data from the .mat files. Rank-orders based on
     specific block number within subject.
@@ -115,8 +118,8 @@ def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_b
     conds: list
         list of integers specifying the conditional datasets to extract
         (0 for trained_cp, 1 for trained_ip, 2 for untrained_cp, 3 for untrained_ip)
-    block_length: int
-        the number of voxels to standardize every block in the dataset to
+    tr_length: int
+        the number of voxels to standardize every TR in the dataset to
     rank_block: int
         the sequential number of the block upon which to rank-order all other blocks 
         within the subject
@@ -146,26 +149,31 @@ def extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_b
                 block_data = []
                 for tr in block[0]:
                     # Extract all voxel data from individual TRs
-                    block_data.extend(tr[0][0][0].tolist())
-                
+                    block_data.append(tr[0][0][0].tolist())
+
                 if block_count == rank_block:
-                    if use_abs_to_rank:    
-                        ranked_indices = [i for i in (np.array([abs(n) for n in block_data])).argsort(kind='mergesort')[-block_length:]]
+                    # Calculate voxel-wise average TR for the block
+                    average_TR = np.array(block_data).mean(axis=0)
+                    if use_abs_to_rank:
+                        ranked_indices = [i for i in (np.array([abs(n) for n in average_TR])).argsort(kind='mergesort')[-tr_length:]]
                         ranked_indices = np.flip(ranked_indices)
                     else:
-                        ranked_indices = [i for i in (-np.array(block_data)).argsort(kind='mergesort')[:block_length]]
+                        ranked_indices = [i for i in (-np.array(average_TR)).argsort(kind='mergesort')[:tr_length]]
     
                 x_data.append(block_data)
                 y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
-    
+
     # Run through and rank-order based on subject block  
-    for block_n in range(len(x_data)):
-        x_data[block_n] = [x_data[block_n][i] if i  < len(x_data[block_n]) else 0.0 for i in ranked_indices]
-                
+    for i, block_data in enumerate(x_data):
+        for j, tr in enumerate(block_data):
+            block_data[j] = [tr[idx] if idx < len(tr) else 0.0 for idx in ranked_indices]
+        block_data = [x for tr in block_data[:BLOCK_TR_LIMIT] for x in tr]
+        x_data[i] = block_data
+
     data = {'x': x_data, 'y': y_data}
     return data
 
-def generate_dataset(subjects, path, suffix, roi, conds, block_length, rank_block, use_abs_to_rank):
+def generate_dataset(subjects, path, suffix, roi, conds, tr_length, rank_block, use_abs_to_rank):
     """
     Generates entire dataset from subject list, partitioned by subject.
     
@@ -182,8 +190,8 @@ def generate_dataset(subjects, path, suffix, roi, conds, block_length, rank_bloc
     conds: list
         list of integers specifying the conditional datasets to extract
         (0 for trained_cp, 1 for trained_ip, 2 for untrained_cp, 3 for untrained_ip)    
-    block_length: int
-        the number of voxels to standardize every block in the dataset to
+    tr_length: int
+        the number of voxels to standardize every TR in the dataset to
     rank_block: int
         the sequential number of the block upon which to rank-order all other blocks 
         within the subject
@@ -204,7 +212,7 @@ def generate_dataset(subjects, path, suffix, roi, conds, block_length, rank_bloc
     y_data_by_subject = dict()
     
     for subject in subjects:
-        subject_data = extract_subject_data(path, subject, suffix, roi, conds, block_length, rank_block, use_abs_to_rank)
+        subject_data = extract_subject_data(path, subject, suffix, roi, conds, tr_length, rank_block, use_abs_to_rank)
         x_data_indices.append(len(x_data))
         y_data_by_subject[subject] = subject_data['y']
         
@@ -388,8 +396,8 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
     """
     
     subjects, suffix = get_subjects(data_params['path'])
-    block_length, _ = get_min_max_block_length(data_params['path'], subjects, suffix, data_params['roi'], data_params['conds'])
-    x_data, y_data = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'], block_length, rank_block, use_abs_to_rank)
+    tr_length, _ = get_min_max_tr_length(data_params['path'], subjects, suffix, data_params['roi'], data_params['conds'])
+    x_data, y_data = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'], tr_length, rank_block, use_abs_to_rank)
         
     inner_acc_report = []
     outer_acc_report = []
