@@ -16,14 +16,12 @@ from joblib import Parallel, delayed
 """
 Constants
 """
-BLOCK_TR_LIMIT = 8
-gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
-C_range = {'start': -3, 'stop': 15, 'num': 19, 'base': 2.0}
-kernels = ['rbf', 'sigmoid']
+MAX_ITERS = -1
+TOL = 1e-3
 
-# gamma_range = {'start': -11, 'stop': 1, 'num': 5, 'base': 10.0}
-# C_range = {'start': -4, 'stop': 8, 'num': 5, 'base': 10.0}
-# kernels = ['rbf']
+gamma_range = {'start': -15, 'stop': 3, 'num': 7, 'base': 2.0}
+C_range = {'start': -3, 'stop': 15, 'num': 7, 'base': 2.0}
+kernels = ['rbf']
 
 def get_subjects(path):    
     """
@@ -100,7 +98,7 @@ def get_min_max_tr_length(path, subjects, suffix, roi, conds):
 
     return min_trl, max_trl
 
-def extract_subject_data(path, subject, suffix, roi, conds, tr_length, rank_block, use_abs_to_rank):
+def extract_subject_data(path, subject, suffix, roi, conds):
     """
     Extracts individual subject data from the .mat files. Rank-orders based on
     specific block number within subject.
@@ -118,14 +116,6 @@ def extract_subject_data(path, subject, suffix, roi, conds, tr_length, rank_bloc
     conds: list
         list of integers specifying the conditional datasets to extract
         (0 for trained_cp, 1 for trained_ip, 2 for untrained_cp, 3 for untrained_ip)
-    tr_length: int
-        the number of voxels to standardize every TR in the dataset to
-    rank_block: int
-        the sequential number of the block upon which to rank-order all other blocks 
-        within the subject
-    use_abs_to_rank: boolean
-        whether to use greatest absolute voxel values to rank-order vectors; 
-        otherwise, use most positive voxel values
         
     Returns
     -------
@@ -133,47 +123,57 @@ def extract_subject_data(path, subject, suffix, roi, conds, tr_length, rank_bloc
     labels (y_data)
     """
     
-    x_data = []
-    y_data = []
-    
     path_to_file = path + subject + suffix
     mat = scipy.io.loadmat(path_to_file)['roi_scanData'][0][roi]
     
-    ranked_indices = None
-    
     block_count = 0
+    x_data = [[] for _ in conds]
     for scan in mat[0]:
-        for cond in conds:
+        for c, cond in enumerate(conds):
             for block in scan[0][cond][0]:
                 block_count += 1
                 block_data = []
-                for tr in block[0]:
+
+                if len(block[0]) == 8:
+                    trs = block[0]
+                elif len(block[0]) == 9:
+                    trs = block[0][0:8]
+                else:
+                    trs = block[0][1:9]
+                for tr in trs:
                     # Extract all voxel data from individual TRs
                     block_data.append(tr[0][0][0].tolist())
 
-                if block_count == rank_block:
-                    # Calculate voxel-wise average TR for the block
-                    average_TR = np.array(block_data).mean(axis=0)
-                    if use_abs_to_rank:
-                        ranked_indices = [i for i in (np.array([abs(n) for n in average_TR])).argsort(kind='mergesort')[-tr_length:]]
-                        ranked_indices = np.flip(ranked_indices)
-                    else:
-                        ranked_indices = [i for i in (-np.array(average_TR)).argsort(kind='mergesort')[:tr_length]]
-    
-                x_data.append(block_data)
-                y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
+                x_data[c].append(block_data)
+                # y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
 
-    # Run through and rank-order based on subject block  
-    for i, block_data in enumerate(x_data):
-        for j, tr in enumerate(block_data):
-            block_data[j] = [tr[idx] if idx < len(tr) else 0.0 for idx in ranked_indices]
-        block_data = [x for tr in block_data[:BLOCK_TR_LIMIT] for x in tr]
-        x_data[i] = block_data
+    # Standardize to 8 blocks of 8 TRs
+    if block_count == 8:
+        x_data = x_data
+    elif block_count == 12:
+        x_data[0] = np.concatenate((np.mean([x_data[0][:2], x_data[0][-2:]], axis=0), x_data[0][2:-2]))
+        x_data[1] = np.concatenate((np.mean([x_data[1][:2], x_data[1][-2:]], axis=0), x_data[1][2:-2]))
+    elif block_count == 16:
+        x_data[0] = np.mean([x_data[0][:4], x_data[0][-4:]], axis=0)
+        x_data[1] = np.mean([x_data[1][:4], x_data[1][-4:]], axis=0)
+    else:
+        print("Undefined number of blocks!")
 
-    data = {'x': x_data, 'y': y_data}
+    x_data_f, y_data_f = [], []
+
+    # Flatten and transform data into units by voxel
+    for c in range(len(conds)):
+        trs = []
+        for a in x_data[c]:
+            trs.extend(a)
+        trs = np.array(trs).T
+        x_data_f.extend(trs)
+        y_data_f.extend([c for _ in trs])
+
+    data = {'x': x_data_f, 'y': y_data_f}
     return data
 
-def generate_dataset(subjects, path, suffix, roi, conds, tr_length, rank_block, use_abs_to_rank):
+def generate_dataset(subjects, path, suffix, roi, conds):
     """
     Generates entire dataset from subject list, partitioned by subject.
     
@@ -189,15 +189,7 @@ def generate_dataset(subjects, path, suffix, roi, conds, tr_length, rank_block, 
         0 for V1 data, 1 for MT data
     conds: list
         list of integers specifying the conditional datasets to extract
-        (0 for trained_cp, 1 for trained_ip, 2 for untrained_cp, 3 for untrained_ip)    
-    tr_length: int
-        the number of voxels to standardize every TR in the dataset to
-    rank_block: int
-        the sequential number of the block upon which to rank-order all other blocks 
-        within the subject
-    use_abs_to_rank: boolean
-        whether to use greatest absolute voxel values to rank-order vectors; otherwise, use
-        most positive voxel values
+        (0 for trained_cp, 1 for trained_ip, 2 for untrained_cp, 3 for untrained_ip)
     
     Returns
     -------
@@ -212,7 +204,7 @@ def generate_dataset(subjects, path, suffix, roi, conds, tr_length, rank_block, 
     y_data_by_subject = dict()
     
     for subject in subjects:
-        subject_data = extract_subject_data(path, subject, suffix, roi, conds, tr_length, rank_block, use_abs_to_rank)
+        subject_data = extract_subject_data(path, subject, suffix, roi, conds)
         x_data_indices.append(len(x_data))
         y_data_by_subject[subject] = subject_data['y']
         
@@ -298,7 +290,7 @@ def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
             
     return x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer
 
-def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_range):
+def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_range, n_cores):
     """
     Gets best hyperparameters (kernel, C, and gamma values) that optimize SVM's predictions for given
     x and y test dataset.
@@ -334,22 +326,25 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
     C_vals = np.logspace(C_range['start'], C_range['stop'], C_range['num'], base=C_range['base'])
     param_grid = ParameterGrid({'kernel': kernels, 'gamma': gamma_vals, 'C': C_vals})
     
+    def evaluate_acc(params):
+        svclassifier = SVC(kernel=params['kernel'], gamma=params['gamma'], C=params['C'], max_iter=MAX_ITERS, tol=TOL)
+        svclassifier.fit(x_train, y_train)
+        
+        return svclassifier.score(x_test, y_test), params
+
+    search = Parallel(n_jobs=n_cores)(delayed(evaluate_acc)(params) for params in list(param_grid))
+    search.sort(key=lambda x: tuple(x[1].values()))
+
     best_acc = 0
     best_params = None
-    
-    # Tests each parameter combination to find best one for given testing data
-    for params in list(param_grid):
-        svclassifier = SVC(kernel=params['kernel'], gamma=params['gamma'], C=params['C'], max_iter=-1)
-        svclassifier.fit(x_train, y_train)
-
-        curr_acc = svclassifier.score(x_test, y_test)
-        if curr_acc > best_acc:
-            best_acc = curr_acc
-            best_params = params
+    for result in search:
+        if result[0] > best_acc:
+            best_acc = result[0]
+            best_params = result[1]
             
     return best_params, best_acc
 
-def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, use_abs_to_rank=False):
+def train(data_params, grid_params, num_inner=1, scramble=False, n_cores=1):
     """
     Trains and tests the classifier for accuracy using SVMs.
     
@@ -378,14 +373,6 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
     scramble: boolean, optional
         whether or not to scramble the labels when training, 
         default is False
-    rank_block: int
-        the sequential number of the block upon which to rank-order all other blocks 
-        within the subject,
-        default is 1
-    use_abs_to_rank: boolean
-        whether to use greatest absolute voxel values to rank-order vectors; otherwise, use
-        most positive voxel values,
-        default is False
         
     Returns
     -------
@@ -396,8 +383,7 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
     """
     
     subjects, suffix = get_subjects(data_params['path'])
-    tr_length, _ = get_min_max_tr_length(data_params['path'], subjects, suffix, data_params['roi'], data_params['conds'])
-    x_data, y_data = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'], tr_length, rank_block, use_abs_to_rank)
+    x_data, y_data = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'])
         
     inner_acc_report = []
     outer_acc_report = []
@@ -414,14 +400,14 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
             x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer = split_dataset(x_data, y_data, inner_test_subjects, outer_subject, scramble)
 
             # Gets optimal params for training dataset from grid search
-            opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test_inner, y_test_inner, grid_params['kernels'], grid_params['gamma'], grid_params['C']) 
+            opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test_inner, y_test_inner, grid_params['kernels'], grid_params['gamma'], grid_params['C'], n_cores) 
             assert(len(set(y_train)) == 2)
             assert(len(set(y_test_inner)) == 2)
             assert(len(set(y_test_outer)) == 2)
             
             if opt_params is not None:
                 # Trains model using optimal params for this set
-                svclassifier = SVC(kernel=opt_params['kernel'], gamma=opt_params['gamma'], C=opt_params['C'], max_iter=-1)
+                svclassifier = SVC(kernel=opt_params['kernel'], gamma=opt_params['gamma'], C=opt_params['C'], max_iter=MAX_ITERS, tol=TOL)
                 svclassifier.fit(x_train, y_train)
                 
                 # Track optimal params among all inner folds
@@ -433,15 +419,18 @@ def train(data_params, grid_params, num_inner=1, scramble=False, rank_block=1, u
 
         # Test outer subject using optimal params across all inner folds
         x_train, y_train, _, _, x_test_outer, y_test_outer = split_dataset(x_data, y_data, [], outer_subject, scramble)
-        svclassifier = SVC(kernel=opt_inner_params['kernel'], gamma=opt_inner_params['gamma'], C=opt_inner_params['C'], max_iter=-1)
+        svclassifier = SVC(kernel=opt_inner_params['kernel'], gamma=opt_inner_params['gamma'], C=opt_inner_params['C'], max_iter=MAX_ITERS, tol=TOL)
         svclassifier.fit(x_train, y_train)
         
         outer_acc = svclassifier.score(x_test_outer, y_test_outer)
         outer_acc_report.append(outer_acc)
+
+        np.save(f'{output_path}/outer_accs.npy', outer_acc_report)
+        np.save(f'{output_path}/inner_accs.npy', inner_acc_report)
     
     return inner_acc_report, outer_acc_report
 
-def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cores=1, num_rank_blocks=1, output_path=''):
+def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cores=1, output_path=''):
     """
     Performs a specified number of runs where data labels are scrambled.
     
@@ -468,7 +457,7 @@ def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cor
     """
         
     for _ in tqdm(range(runs)):
-        result = Parallel(n_jobs=n_cores)(delayed(train)(data_params, grid_params, scramble=True, rank_block=i) for i in range(1, num_rank_blocks+1))
+        result = train(data_params, grid_params, scramble=True, n_cores=n_cores)
 
         for rank_result in result:
             inner_result, outer_result = rank_result
@@ -487,8 +476,6 @@ parser.add_argument("outdir", metavar="OUTDIR", help="directory to output data")
 parser.add_argument("-p", "--permute", action="store_true", help="permute training data")
 
 parser.add_argument("-n", "--run-count", action="store", default=1, type=int, help="run RUN_COUNT permutations")
-parser.add_argument("-b", "--block-count", action="store", default=1, type=int, help="rank-order BLOCK_COUNT number of blocks")
-
 parser.add_argument("-r", "--roi", action="store", type=int, help="ROI: V1 is 0, MT is 1")
 parser.add_argument("-c", "--cond", action="store", type=int, help="conditions: 0 is CP/Large, 1 is IP/Small")
 
@@ -505,7 +492,6 @@ if args.cond is None:
 
 roi = args.roi
 conds = [args.cond, args.cond+2]
-block_count = args.block_count
 run_count = args.run_count
 num_cores = args.cores
 
@@ -529,22 +515,18 @@ if args.permute:
         inner_dist = []
         outer_dist = []
 
-    permutation(data_params, grid_params, inner_dist, outer_dist, runs=run_count, output_path=output_path, num_rank_blocks=block_count, n_cores=num_cores)
+    permutation(data_params, grid_params, inner_dist, outer_dist, runs=run_count, output_path=output_path, n_cores=num_cores)
 
     np.save(f'{output_path}/outer_perms.npy', outer_dist)
     np.save(f'{output_path}/inner_perms.npy', inner_dist)
 
 else:
-    result = Parallel(n_jobs=num_cores)(delayed(train)(data_params, grid_params, rank_block=i) for i in range(1, block_count+1))
-
     inner_accs = []
     outer_accs = []
-    for rank_result in result:
-        inner_result = rank_result[0]
-        outer_result = rank_result[1]
+    inner_result, outer_result = train(data_params, grid_params, n_cores=num_cores)
         
-        inner_accs.append(inner_result)
-        outer_accs.append(outer_result)
+    inner_accs.append(inner_result)
+    outer_accs.append(outer_result)
 
     np.save(f'{output_path}/outer_accs.npy', outer_accs)
     np.save(f'{output_path}/inner_accs.npy', inner_accs)
