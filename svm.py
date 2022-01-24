@@ -457,12 +457,10 @@ def permutation(data_params, grid_params, inner_dist, outer_dist, runs=30, n_cor
     """
         
     for _ in tqdm(range(runs)):
-        result = train(data_params, grid_params, scramble=True, n_cores=n_cores)
+        inner_result, outer_result = train(data_params, grid_params, scramble=True, n_cores=n_cores)
 
-        for rank_result in result:
-            inner_result, outer_result = rank_result
-            inner_dist.append(inner_result)
-            outer_dist.append(outer_result)
+        inner_dist.append(inner_result)
+        outer_dist.append(outer_result)
 
         np.save(f'{output_path}/outer_perms.npy', outer_dist)
         np.save(f'{output_path}/inner_perms.npy', inner_dist)
