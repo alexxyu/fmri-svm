@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os
+import sys
 import math
 import random
 import argparse
@@ -22,6 +23,16 @@ TOL = 1e-3
 gamma_range = {'start': -15, 'stop': 3, 'num': 7, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 7, 'base': 2.0}
 kernels = ['rbf']
+
+def write_readme(path):
+    with open(f'{path}/README', 'w') as f:
+        f.write('Command line arguments:\n')
+        f.write(f'{" ".join(sys.argv)}\n\n')
+        
+        f.write('Hyperparameter set:\n')
+        f.write(f'Gamma: {gamma_range}\n')
+        f.write(f'C: {C_range}\n')
+        f.write(f'Kernels: {kernels}\n')
 
 def get_subjects(path):    
     """
@@ -503,6 +514,8 @@ if path[-1] != '/':
 
 data_params = {'path': path, 'roi': roi, 'conds': conds}
 grid_params = {'gamma': gamma_range, 'C': C_range, 'kernels': kernels}
+
+write_readme(output_path)
 
 if args.permute:
     try:

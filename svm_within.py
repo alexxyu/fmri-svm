@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os
+import sys
 import random
 import argparse
 import scipy.io
@@ -18,6 +19,15 @@ Constants
 gamma_range = {'start': -15, 'stop': 3, 'num': 19, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 19, 'base': 2.0}
 kernels = ['rbf', 'sigmoid']
+
+def write_readme(path):
+    with open(f'{path}/README', 'w') as f:
+        f.write('Command line arguments:\n')
+        f.write(f'{" ".join(sys.argv)}\n\n')
+        f.write('Hyperparameter set:\n')
+        f.write(f'Gamma: {gamma_range}\n')
+        f.write(f'C: {C_range}\n')
+        f.write(f'Kernels: {kernels}\n')
 
 def get_subjects(path):
     """
@@ -363,6 +373,8 @@ if output_path[-1] != '/':
 path = args.indir
 if path[-1] != '/':
     path += '/'
+
+write_readme(output_path)
 
 data_params = {'path': path, 'roi': roi, 'conds': conds}
 grid_params = {'gamma': gamma_range, 'C': C_range, 'kernels': kernels}
