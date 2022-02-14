@@ -20,9 +20,12 @@ Constants
 MAX_ITERS = -1
 TOL = 1e-3
 
+# Limit the number of blocks to use (set to None to use averaging method)
+BLOCK_LIM = 12
+
 gamma_range = {'start': -15, 'stop': 3, 'num': 7, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 7, 'base': 2.0}
-kernels = ['rbf']
+kernels = ['rbf', 'sigmoid']
 
 def write_readme(path):
     with open(f'{path}/README', 'w') as f:
@@ -33,6 +36,7 @@ def write_readme(path):
         f.write(f'Gamma: {gamma_range}\n')
         f.write(f'C: {C_range}\n')
         f.write(f'Kernels: {kernels}\n')
+        f.write(f'Block Limit: {BLOCK_LIM}\n')
 
 def get_subjects(path):    
     """
@@ -65,49 +69,6 @@ def scramble_labels(y_data):
     num_diff = sum(i != j for i, j in zip(y_data, y_data_copy))  
     if num_diff != len(y_data)//2:
         raise ValueError
-
-def get_min_max_tr_length(path, subjects, suffix, roi, conds):
-    """
-    Gets the minimum and maximum lengths of the TRs in the data.
-    
-    Parameters
-    ----------
-    path: str
-        directory to data files
-    subject: str
-        ID of subject to load data for
-    suffix: str
-        ending suffix of the data filename
-    roi: int
-        0 for V1 data, 1 for MT data
-    conds: list
-        list of integers specifying the conditional datasets to extract
-        
-    Returns
-    -------
-    int
-        minimum block length
-    int
-        maxmimum block length
-    """
-    
-    min_trl, max_trl = math.inf, 0
-    for subject in subjects:
-        
-        path_to_file = path + subject + suffix
-        mat = scipy.io.loadmat(path_to_file)['roi_scanData'][0][roi]
-
-        for scan in mat[0]:
-            for cond in conds:
-                for block in scan[0][cond][0]:
-                    for tr in block[0]:
-                        min_trl = min(min_trl, len(tr[0][0][0]))
-                        max_trl = max(max_trl, len(tr[0][0][0]))
-                    
-    print(f"Min TR length: {min_trl}")
-    print(f"Max TR length: {max_trl}")
-
-    return min_trl, max_trl
 
 def extract_subject_data(path, subject, suffix, roi, conds):
     """
@@ -143,6 +104,9 @@ def extract_subject_data(path, subject, suffix, roi, conds):
         for c, cond in enumerate(conds):
             for block in scan[0][cond][0]:
                 block_count += 1
+                if BLOCK_LIM and block_count > BLOCK_LIM:
+                    continue
+
                 block_data = []
 
                 if len(block[0]) == 8:
@@ -159,16 +123,25 @@ def extract_subject_data(path, subject, suffix, roi, conds):
                 # y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
 
     # Standardize to 8 blocks of 8 TRs
-    if block_count == 8:
-        x_data = x_data
-    elif block_count == 12:
-        x_data[0] = np.concatenate((np.mean([x_data[0][:2], x_data[0][-2:]], axis=0), x_data[0][2:-2]))
-        x_data[1] = np.concatenate((np.mean([x_data[1][:2], x_data[1][-2:]], axis=0), x_data[1][2:-2]))
-    elif block_count == 16:
-        x_data[0] = np.mean([x_data[0][:4], x_data[0][-4:]], axis=0)
-        x_data[1] = np.mean([x_data[1][:4], x_data[1][-4:]], axis=0)
-    else:
-        print("Undefined number of blocks!")
+    if BLOCK_LIM == 8:
+        if block_count == 8:
+            x_data = x_data
+        elif block_count == 12:
+            x_data[0] = np.concatenate((np.mean([x_data[0][:2], x_data[0][-2:]], axis=0), x_data[0][2:-2]))
+            x_data[1] = np.concatenate((np.mean([x_data[1][:2], x_data[1][-2:]], axis=0), x_data[1][2:-2]))
+        elif block_count == 16:
+            x_data[0] = np.mean([x_data[0][:4], x_data[0][-4:]], axis=0)
+            x_data[1] = np.mean([x_data[1][:4], x_data[1][-4:]], axis=0)
+        else:
+            print("Undefined number of blocks!")
+    elif BLOCK_LIM == 12:
+        if block_count == 12:
+            x_data = x_data
+        elif block_count == 16:
+            x_data[0] = np.concatenate((np.mean([x_data[0][:2], x_data[0][-2:]], axis=0), x_data[0][2:-2]))
+            x_data[1] = np.concatenate((np.mean([x_data[1][:2], x_data[1][-2:]], axis=0), x_data[1][2:-2]))
+        else:
+            print("Undefined number of blocks!")
 
     x_data_f, y_data_f = [], []
 
