@@ -12,6 +12,8 @@ from sklearn.svm import SVC
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import ParameterGrid
 from joblib import Parallel, delayed
+from sklearn.utils._testing import ignore_warnings
+from sklearn.exceptions import ConvergenceWarning
 
 """
 Hyperparameters
@@ -24,12 +26,12 @@ gamma_range, C_range, and kernels affect SVM model
 MAX_ITERS = -1
 TOL = 1e-3
 
-USE_AVG = True
+USE_AVG = False
 BLOCK_LIM = 8
 
 gamma_range = {'start': -15, 'stop': 3, 'num': 7, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 7, 'base': 2.0}
-kernels = ['rbf', 'sigmoid']
+kernels = ['sigmoid']
 
 def write_readme(path):
     with open(f'{path}/README', 'w') as f:
@@ -112,8 +114,6 @@ def extract_subject_data(path, subject, suffix, roi, conds):
                     continue
 
                 block_data = []
-
-                block_data = []
                 if len(block[0]) == 8:
                     trs = block[0]
                 elif len(block[0]) == 9:
@@ -187,16 +187,23 @@ def generate_dataset(subjects, path, suffix, roi, conds):
         voxel data with subject key
     dict
         label data with subject key
+    dict
+        scrambled label data with subject key
     """
     
     x_data = []
     x_data_indices = []
     y_data_by_subject = dict()
+    y_data_by_subject_scrambled = dict()
     
     for subject in subjects:
         subject_data = extract_subject_data(path, subject, suffix, roi, conds)
         x_data_indices.append(len(x_data))
         y_data_by_subject[subject] = subject_data['y']
+        
+        y_scrambled = subject_data['y'].copy()
+        scramble_labels(y_scrambled)
+        y_data_by_subject_scrambled[subject] = y_scrambled
         
         x_data.extend(subject_data['x'])
     
@@ -215,10 +222,11 @@ def generate_dataset(subjects, path, suffix, roi, conds):
     
     x_data_by_subject = {k: v for k, v in sorted(x_data_by_subject.items(), key=lambda item: len(item[1]))}
     y_data_by_subject = {k: v for k, v in sorted(y_data_by_subject.items(), key=lambda item: len(item[1]))}
-    
-    return x_data_by_subject, y_data_by_subject
+    y_data_by_subject_scrambled = {k: v for k, v in sorted(y_data_by_subject_scrambled.items(), key=lambda item: len(item[1]))}
 
-def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
+    return x_data_by_subject, y_data_by_subject, y_data_by_subject_scrambled
+
+def split_dataset(x_data, y_data, y_data_scrambled, inner_subjects, outer_subject, scramble):
     """
     Splits voxel and label data into appropriate testing and training data for nested
     cross-validation with SVM.
@@ -229,12 +237,14 @@ def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
         voxel data with subject key
     y_data: dict
         label data with subject key
+    y_data_scrambled: dict
+        scrambled label data with subject key
     inner_subjects: list
         list of subject IDs of the inner test subjects
     outer_subject: str
         the ID of the outer test subject
     scramble: boolean, optional
-        whether or not to scramble the labels when training, 
+        whether or not to use scrambled labels when training, 
         default is False
     
     Returns
@@ -272,9 +282,7 @@ def split_dataset(x_data, y_data, inner_subjects, outer_subject, scramble):
         else:
             x_train.extend(x_data[subject])
             if scramble:
-                y_scrambled = y_data[subject].copy()
-                scramble_labels(y_scrambled)
-                y_train.extend(y_scrambled)
+                y_train.extend(y_data_scrambled[subject])
             else:
                 y_train.extend(y_data[subject])
             
@@ -316,6 +324,7 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
     C_vals = np.logspace(C_range['start'], C_range['stop'], C_range['num'], base=C_range['base'])
     param_grid = ParameterGrid({'kernel': kernels, 'gamma': gamma_vals, 'C': C_vals})
     
+    @ignore_warnings(category=ConvergenceWarning)
     def evaluate_acc(params):
         svclassifier = SVC(kernel=params['kernel'], gamma=params['gamma'], C=params['C'], max_iter=MAX_ITERS, tol=TOL)
         svclassifier.fit(x_train, y_train)
@@ -334,6 +343,7 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
             
     return best_params, best_acc
 
+@ignore_warnings(category=ConvergenceWarning)
 def train(data_params, grid_params, num_inner=1, scramble=False, n_cores=1):
     """
     Trains and tests the classifier for accuracy using SVMs.
@@ -373,7 +383,7 @@ def train(data_params, grid_params, num_inner=1, scramble=False, n_cores=1):
     """
     
     subjects, suffix = get_subjects(data_params['path'])
-    x_data, y_data = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'])
+    x_data, y_data, y_data_scrambled = generate_dataset(subjects, data_params['path'], suffix, data_params['roi'], data_params['conds'])
         
     inner_acc_report = []
     outer_acc_report = []
@@ -387,7 +397,7 @@ def train(data_params, grid_params, num_inner=1, scramble=False, n_cores=1):
         for inner_test_subjects in itertools.combinations((inner_subjects), num_inner):
             inner_test_subjects = list(inner_test_subjects)
             
-            x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer = split_dataset(x_data, y_data, inner_test_subjects, outer_subject, scramble)
+            x_train, y_train, x_test_inner, y_test_inner, x_test_outer, y_test_outer = split_dataset(x_data, y_data, y_data_scrambled, inner_test_subjects, outer_subject, scramble)
 
             # Gets optimal params for training dataset from grid search
             opt_params, inner_acc = get_optimal_run(x_train, y_train, x_test_inner, y_test_inner, grid_params['kernels'], grid_params['gamma'], grid_params['C'], n_cores) 
@@ -408,7 +418,7 @@ def train(data_params, grid_params, num_inner=1, scramble=False, n_cores=1):
                 inner_acc_report.append(inner_acc)
 
         # Test outer subject using optimal params across all inner folds
-        x_train, y_train, _, _, x_test_outer, y_test_outer = split_dataset(x_data, y_data, [], outer_subject, scramble)
+        x_train, y_train, _, _, x_test_outer, y_test_outer = split_dataset(x_data, y_data, y_data_scrambled, [], outer_subject, scramble)
         svclassifier = SVC(kernel=opt_inner_params['kernel'], gamma=opt_inner_params['gamma'], C=opt_inner_params['C'], max_iter=MAX_ITERS, tol=TOL)
         svclassifier.fit(x_train, y_train)
         
