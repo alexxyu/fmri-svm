@@ -83,7 +83,10 @@ def extract_subject_data(mat, subject, roi, use_pre):
                     # Extract all voxel data from individual TRs
                     block_data.append(tr[0][0][0].tolist())
 
-                x_data[c // 2].append(block_data)
+                if use_pre:
+                    x_data[c].append(block_data)
+                else:
+                    x_data[c // 2].append(block_data)
                 # y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
 
     x_data_f, y_data_f = [], []
@@ -187,6 +190,9 @@ def get_optimal_run(x_train, y_train, x_test, y_test, kernels, gamma_range, C_ra
 
 def train(data_params, grid_params, num_inner=1, scramble=False, n_cores=1):
     subjects = get_subjects(data_params['path'])
+    if data_params['cond'] == 0:
+       subjects.remove('CG')
+
     mat = scipy.io.loadmat(data_params['path'])['ipOnly_roi_scanData']
     x_data, y_data, y_data_shuffled = generate_dataset(mat, subjects, data_params['roi'], data_params['cond'])
         
