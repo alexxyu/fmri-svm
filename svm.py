@@ -15,13 +15,18 @@ from sklearn.model_selection import ParameterGrid
 from joblib import Parallel, delayed
 
 """
-Constants
+Hyperparameters
+===============
+MAX_ITERS and TOL affect SVM stopping criteria
+USE_AVG determines whether extra blocks are averaged in
+BLOCK_LIM determines how many blocks are used (averaging or not)
+gamma_range, C_range, and kernels affect SVM model
 """
 MAX_ITERS = -1
 TOL = 1e-3
 
-# Limit the number of blocks to use (set to None to use averaging method)
-BLOCK_LIM = 12
+USE_AVG = True
+BLOCK_LIM = 8
 
 gamma_range = {'start': -15, 'stop': 3, 'num': 7, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 7, 'base': 2.0}
@@ -67,7 +72,7 @@ def scramble_labels(y_data):
     
     # Makes sure labels are scrambled properly
     num_diff = sum(i != j for i, j in zip(y_data, y_data_copy))  
-    if num_diff != len(y_data)//2:
+    if abs(len(y_data)//2 - num_diff) > 1:
         raise ValueError
 
 def extract_subject_data(path, subject, suffix, roi, conds):
@@ -104,7 +109,7 @@ def extract_subject_data(path, subject, suffix, roi, conds):
         for c, cond in enumerate(conds):
             for block in scan[0][cond][0]:
                 block_count += 1
-                if BLOCK_LIM and block_count > BLOCK_LIM:
+                if not USE_AVG and block_count > BLOCK_LIM:
                     continue
 
                 block_data = []
@@ -123,7 +128,7 @@ def extract_subject_data(path, subject, suffix, roi, conds):
                 # y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
 
     # Standardize to 8 blocks of 8 TRs
-    if BLOCK_LIM == 8:
+    if USE_AVG and BLOCK_LIM == 8:
         if block_count == 8:
             x_data = x_data
         elif block_count == 12:
@@ -134,7 +139,7 @@ def extract_subject_data(path, subject, suffix, roi, conds):
             x_data[1] = np.mean([x_data[1][:4], x_data[1][-4:]], axis=0)
         else:
             print("Undefined number of blocks!")
-    elif BLOCK_LIM == 12:
+    elif USE_AVG and BLOCK_LIM == 12:
         if block_count == 12:
             x_data = x_data
         elif block_count == 16:
