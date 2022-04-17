@@ -2,7 +2,6 @@
 
 import os
 import sys
-import math
 import random
 import argparse
 import itertools
@@ -114,10 +113,11 @@ def extract_subject_data(path, subject, suffix, roi, conds):
 
                 block_data = []
 
+                block_data = []
                 if len(block[0]) == 8:
                     trs = block[0]
                 elif len(block[0]) == 9:
-                    trs = block[0][0:8]
+                    trs = block[0][:8]
                 else:
                     trs = block[0][1:9]
                 for tr in trs:
@@ -125,10 +125,9 @@ def extract_subject_data(path, subject, suffix, roi, conds):
                     block_data.append(tr[0][0][0].tolist())
 
                 x_data[c].append(block_data)
-                # y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
 
-    # Standardize to 8 blocks of 8 TRs
     if USE_AVG and BLOCK_LIM == 8:
+        # Standardize to 8 blocks of 8 TRs
         if block_count == 8:
             x_data = x_data
         elif block_count == 12:
@@ -139,10 +138,12 @@ def extract_subject_data(path, subject, suffix, roi, conds):
             x_data[1] = np.mean([x_data[1][:4], x_data[1][-4:]], axis=0)
         else:
             print("Undefined number of blocks!")
-    elif USE_AVG and BLOCK_LIM == 12:
+    if USE_AVG and BLOCK_LIM == 12:
+        # Standardize to 12 blocks of 8 TRs
         if block_count == 12:
             x_data = x_data
         elif block_count == 16:
+            assert(len(x_data[0]) == 8 and len(x_data[1]) == 8)
             x_data[0] = np.concatenate((np.mean([x_data[0][:2], x_data[0][-2:]], axis=0), x_data[0][2:-2]))
             x_data[1] = np.concatenate((np.mean([x_data[1][:2], x_data[1][-2:]], axis=0), x_data[1][2:-2]))
         else:
