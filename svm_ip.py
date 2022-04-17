@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
-import os
-import math
+import sys
 import random
 import argparse
 import itertools
@@ -21,7 +20,17 @@ TOL = 1e-3
 
 gamma_range = {'start': -15, 'stop': 3, 'num': 7, 'base': 2.0}
 C_range = {'start': -3, 'stop': 15, 'num': 7, 'base': 2.0}
-kernels = ['rbf']
+kernels = ['rbf', 'sigmoid']
+
+def write_readme(path):
+    with open(f'{path}/README', 'w') as f:
+        f.write('Command line arguments:\n')
+        f.write(f'{" ".join(sys.argv)}\n\n')
+        
+        f.write('Hyperparameter set:\n')
+        f.write(f'Gamma: {gamma_range}\n')
+        f.write(f'C: {C_range}\n')
+        f.write(f'Kernels: {kernels}\n')
 
 def get_subjects(path):    
     mat = scipy.io.loadmat(path)['ipOnly_roi_scanData']
@@ -45,7 +54,7 @@ def scramble_labels(y_data):
     
     # Makes sure labels are scrambled properly
     num_diff = sum(i != j for i, j in zip(y_data, y_data_copy))  
-    if num_diff != len(y_data)//2:
+    if abs(len(y_data)//2 - num_diff) > 1:
         raise ValueError
 
 def extract_subject_data(mat, subject, roi, use_pre):
@@ -74,20 +83,8 @@ def extract_subject_data(mat, subject, roi, use_pre):
                     # Extract all voxel data from individual TRs
                     block_data.append(tr[0][0][0].tolist())
 
-                x_data[c].append(block_data)
+                x_data[c // 2].append(block_data)
                 # y_data.append('untrained' if 'untrained' in scan[1][cond][0] else 'trained')
-
-    # # Standardize to 8 blocks of 8 TRs
-    # if block_count == 8:
-    #     x_data = x_data
-    # elif block_count == 12:
-    #     x_data[0] = np.concatenate((np.mean([x_data[0][:2], x_data[0][-2:]], axis=0), x_data[0][2:-2]))
-    #     x_data[1] = np.concatenate((np.mean([x_data[1][:2], x_data[1][-2:]], axis=0), x_data[1][2:-2]))
-    # elif block_count == 16:
-    #     x_data[0] = np.mean([x_data[0][:4], x_data[0][-4:]], axis=0)
-    #     x_data[1] = np.mean([x_data[1][:4], x_data[1][-4:]], axis=0)
-    # else:
-    #     print("Undefined number of blocks!")
 
     x_data_f, y_data_f = [], []
 
@@ -309,6 +306,8 @@ path = args.indir
 
 data_params = {'path': path, 'roi': roi, 'cond': cond}
 grid_params = {'gamma': gamma_range, 'C': C_range, 'kernels': kernels}
+
+write_readme(output_path)
 
 if args.permute:
     try:
